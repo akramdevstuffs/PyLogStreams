@@ -1,0 +1,1 @@
+rmdir /q /s logs && python mini_kafka.py
