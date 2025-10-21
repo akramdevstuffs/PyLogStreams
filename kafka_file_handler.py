@@ -7,7 +7,7 @@ import platform
 import _io
 from dataclasses import dataclass
 
-RETENSION = 5*60 # Seconds
+RETENSION = 50*60 # Seconds
 
 GRACE_DELETION_TIME = 5 # Delete file after 5 seconds of being marked
 
@@ -315,3 +315,4 @@ def start_threads():
     t1.start()
     t2.start()
     t3.start()
+print("File handler Module loaded")
