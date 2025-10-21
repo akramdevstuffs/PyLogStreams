@@ -6,14 +6,17 @@ import threading
 import platform
 import _io
 from dataclasses import dataclass
+from segment_cache import LRUCache
 
 RETENSION = 50*60 # Seconds
 
 GRACE_DELETION_TIME = 5 # Delete file after 5 seconds of being marked
 
-SEGMENT_SIZE = 1024*1024*100 # 10MB, split the segments at 10MB size
+SEGMENT_SIZE = 1024*1024 # 1MB, split the segments at 10MB size
 
-SEG_SIZE_INC = 1024*1024*10 # 1MB, what which size he segments should increase
+SEG_SIZE_INC = 1024*100 # 100KB, what which size he segments should increase
+
+OLD_SEGMENT_CACHE_SIZE = 1000 # Number of old segments to keep in cache
 
 @dataclass
 class Segment:
@@ -24,6 +27,16 @@ class Segment:
     write_offset: int
 
 topics_log_file = {} # (topic: [Segment, Segment1...], ...)
+
+# Init segment caches
+def on_segment_evicted(key, seg: Segment):
+    #File is opened
+    if seg.f:
+        # Close mmap and file
+        if seg.mm:
+            seg.mm.close()
+        seg.f.close()
+segmentCache = LRUCache(OLD_SEGMENT_CACHE_SIZE, on_segment_evicted)
 
 # Only keeps the latest offset of active segment
 segments_write_offset = {} # ('files/topic/seg1.txt': 0230, ...) 
@@ -92,14 +105,22 @@ def get_topic_log(topic, offset=-1):
             else:
                 r = mid-1
     __segment = topics_list[index]
-    # Load the topic file if not loaded
+    # It's old segment
+    # Get the cached segment
     if __segment[1] is None:
-        filename = __segment[0].name
-        f = open(filename, 'r+b')
-        mm = mmap.mmap(f.fileno(), 0)
-        __segment = (f, mm, __segment[2], __segment[3], -1)
-        # Save it to the topics_log_file 
-        topics_log_file[topic][index] = __segment
+        cache_key = __segment[0].name
+        cached_segment = segmentCache.get(cache_key)
+        if cached_segment:
+            # we don't need to save it in topics_log_file because it will contain f,mm as None because it's old segment
+            return (cached_segment.f, cached_segment.mm, __segment[2], __segment[3], __segment[4], index)
+        else:
+            # Load from file
+            filename = __segment[0].name
+            f = open(filename, 'r+b')
+            mm = mmap.mmap(f.fileno(), 0)
+            # Save to cache
+            segmentCache.put(cache_key, Segment(f, mm, __segment[2], __segment[3], __segment[4]))
+            return (f, mm, __segment[2], __segment[3], __segment[4], index)
         
     return __segment + (index,) # Include index in return tuple
 
@@ -211,13 +232,6 @@ def read_message(topic, offset=0):
 
     msg_len = int.from_bytes(length_bytes, 'big')
     msg_bytes = mm[file_offset+4: file_offset+4+msg_len]
-    if index != len(topics_log_file[topic])-1:
-        # Reading from a old segment
-        # Close file after reading it to save memory
-        segment[0].close()
-        segment[1].close()
-        # Setting mm to None to mark it closed
-        topics_log_file[topic][index] = (segment[0], None, segment[2], segment[3],segment[4])
     return msg_bytes.decode(), offset+4+msg_len
 
 def mark_file(f, mm, deletion_time):
@@ -271,6 +285,8 @@ def file_remover():
         if (time_pending > 0):
             time.sleep(time_pending)
         try:
+            # Remove from segment cache if exists
+            segmentCache.remove(path)
             os.remove(path)
         except Exception as e:
             print(f"Can't delete file {e}")
