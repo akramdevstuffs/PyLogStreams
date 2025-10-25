@@ -7,14 +7,15 @@ import platform
 import _io
 from dataclasses import dataclass
 from segment_cache import LRUCache
+from utility import set_sequential_hint
 
-RETENSION = 50*60 # Seconds
+RETENSION = 5*60 # Seconds
 
 GRACE_DELETION_TIME = 5 # Delete file after 5 seconds of being marked
 
-SEGMENT_SIZE = 1024*1024 # 1MB, split the segments at 10MB size
+SEGMENT_SIZE = 10*1024*1024 # 10MB, split the segments at 10MB size
 
-SEG_SIZE_INC = 1024*100 # 100KB, what which size he segments should increase
+SEG_SIZE_INC = 1024*1024 # 1MB, what which size he segments should increase
 
 OLD_SEGMENT_CACHE_SIZE = 1000 # Number of old segments to keep in cache
 
@@ -46,7 +47,6 @@ delete_file_queue = queue.Queue() # FIFO thread safe queue for deleting the file
 LOG_FILE_DIR = 'logs'
 if not os.path.isdir(LOG_FILE_DIR):
     os.makedirs(LOG_FILE_DIR)
-
 
 def get_file_birthtime(st: os.stat_result) -> float:
     """os.stat_result object as input """
@@ -148,7 +148,9 @@ def rollover_file(topic):
         with open(filepath, 'wb') as f:
             f.truncate(SEG_SIZE_INC) # 1MB initial size
     f = open(filepath, 'r+b')
+    # Hint to OS for sequential access
     mm = mmap.mmap(f.fileno(), 0)
+    set_sequential_hint(mm,f.fileno())
     __segment = (f,mm,time.time(), SEG_SIZE_INC, start_offset)
     new_segment_list = topics_log_file[topic] + [__segment]
     # Reference swap with new list
@@ -212,8 +214,15 @@ def get_latest_offset(topic):
     write_offset = last_segment[4]
     return write_offset
 
+def check_message_available(topic, offset):
+    return offset < get_latest_offset(topic)
+
 def read_message(topic, offset=0):
     segment = get_topic_log(topic, offset)
+    # mmap is save in topic_log means it's active segment
+    if(segment[1] is not None):
+        if(offset >= segment[4]):
+            return None, offset # Offset out of range
     start_offset = get_offset_from_filename(segment[0].name) # Removing _log.txt from f.name
     # Updating offset to match the file offset
     file_offset = offset-start_offset
@@ -271,7 +280,6 @@ def log_cleaner():
                 topics_log_file[topic] = new_files # Perform atomic swap or reference swap
                 for fp in expired_files:
                     mark_file(fp[0],fp[1],fp[2]+RETENSION+GRACE_DELETION_TIME)
-
         time.sleep(1)  # Runs on every 1 seconds
 
 def file_remover():

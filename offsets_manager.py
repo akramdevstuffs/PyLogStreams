@@ -33,7 +33,7 @@ client_offsets = load_client_offsets()
 for id in list(client_offsets.keys()):
     print(f"Loaded offsets for client {id}: {client_offsets[id]}")
 
-def get_client_offsets(id):
+def get_client_offsets(id) -> dict:
     if id not in client_offsets:
         client_offsets[id] = {}
     return client_offsets[id]
