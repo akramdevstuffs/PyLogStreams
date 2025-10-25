@@ -9,8 +9,8 @@ from multiprocessing import Process
 HOST, PORT = 'localhost',1234
 TOPIC = 'test_topic'
 
-MSG_CNT_PER_PRODUCER = 10000*10
-NUM_PRODUCERS = 50
+MSG_CNT_PER_PRODUCER = 10000*100
+NUM_PRODUCERS = 5
 MSG_SIZE = 1024
 
 user_id = {}
@@ -113,7 +113,7 @@ if __name__ == '__main__':
         _ ='REG'.encode()
         conn.sendall((len(_)).to_bytes(4,'big') + _) # Register
         _ = conn.recv(4) # id_length
-        id_len = int.from_bytes(_)
+        id_len = int.from_bytes(_, 'big')
         _ = conn.recv(id_len)
         id_str = _.decode()
         p = Process(target=producer, args=(conn,id_str,MSG_CNT_PER_PRODUCER, MSG_SIZE, idx))
@@ -146,7 +146,7 @@ if __name__ == '__main__':
             _ ='REG'.encode()
             conn.sendall((len(_)).to_bytes(4,'big') + _) # Register
             _ = conn.recv(4) # id_length
-            id_len = int.from_bytes(_)
+            id_len = int.from_bytes(_,'big')
             _ = conn.recv(id_len)
             id_str = _.decode()
             user_id[idx] = id_str

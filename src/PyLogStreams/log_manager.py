@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from segment_cache import LRUCache
 from utility import set_sequential_hint
 
-RETENSION = 5*60 # Seconds
+RETENSION = 5*60*60 # Seconds
 
 GRACE_DELETION_TIME = 5 # Delete file after 5 seconds of being marked
 
@@ -19,6 +19,7 @@ SEG_SIZE_INC = 1024*1024 # 1MB, what which size he segments should increase
 
 OLD_SEGMENT_CACHE_SIZE = 1000 # Number of old segments to keep in cache
 
+# Currently not used
 @dataclass
 class Segment:
     f: object
@@ -29,7 +30,7 @@ class Segment:
 
 topics_log_file = {} # (topic: [Segment, Segment1...], ...)
 
-# Init segment caches
+# release segment caches
 def on_segment_evicted(key, seg: Segment):
     #File is opened
     if seg.f:
