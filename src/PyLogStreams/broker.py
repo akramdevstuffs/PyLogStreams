@@ -20,6 +20,8 @@ MAX_BUFFERED = 32_000 # or when >64KB of data queued
 LINGER_MS = 50    # only wait 50ms before draining
 BEAT_MAX_DELAY = 120  # seconds
 
+MESSAGE_CHECKSUM_ENABLE = True # Enables the message integrity checks
+
 pool = ThreadPoolExecutor(max_workers=50)
 
 
@@ -39,10 +41,10 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 break
             msg_length = int.from_bytes(len_bytes, 'big')
             msg_bytes = await reader.readexactly(msg_length)
-            msg = msg_bytes.decode()
+            command = msg_bytes[:3].decode()
         except Exception as e:
             return
-        if msg.startswith('REG'):
+        if command == 'REG':
             client_id = str(uuid.uuid4())
             id_bytes = client_id.encode()
             try:
@@ -50,7 +52,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 await writer.drain()
             except Exception:
                 return
-        elif msg.startswith('ID'):
+        elif command == 'CID':
+            msg = msg_bytes.decode()
             client_id = msg.split(' ', 1)[1]
             if client_id in clients_task:
                 # Writer from previous connection still active, close this one
@@ -61,7 +64,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         elif client_id is None:
             # Client must register first
             return
-        elif msg.startswith('SUB'):
+        elif command == 'SUB':
+            msg = msg_bytes.decode()
             parts = msg.split(' ')
             topic = parts[1]
             if topic not in get_client_offsets(client_id):
@@ -75,61 +79,35 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                     clients_task.pop(cid,None))
                 clients_task[client_id] = task
         # For setting offsets from clients side
-        elif msg.startswith('SET'):
+        elif command == 'SET':
+            msg = msg_bytes.decode()
             parts = msg.split(' ')
             topic = parts[1]
             offset = int(parts[2])
             update_client_offset(client_id, topic, offset)
-        elif msg.startswith('PUB'):
+        elif command == 'PUB':
+            msg = msg_bytes.decode()
             parts = msg.split(' ', 2)
             topic = parts[1]
             conv = parts[2]
+            if MESSAGE_CHECKSUM_ENABLE:
+                hash = await reader.readexactly(4) # Reads the 4 byte for checksum
+            else:
+                hash = None
             # loop = asyncio.get_running_loop()
             # await loop.run_in_executor(pool, partial(append_message, topic, conv))
-            append_message(topic, conv)
-            if topic in topic_events:
-                topic_events[topic].set()
-                topic_events[topic].clear()
-        # Heart beat from client
-        elif msg.startswith('PING'):
-            try:
-                client_heartbeats[client_id] = time.time()
-                print(f"Client {client_id} heartbeat at {time.time()}")
-            except Exception:
-                return
+            code = append_message(topic, conv.encode(), hash)
+            if code==0:
+                if topic in topic_events:
+                    topic_events[topic].set()
+                    topic_events[topic].clear()
+            # Add the ack logic here
+            pass
 
-""" Soon to be removed """
-async def client_writer_topic(writer: asyncio.StreamWriter, client_id: str, topic: str):
-    while True:
-        client_offsets = get_client_offsets(client_id)
-        offset = client_offsets.get(topic, 0)
-        if(not check_message_available(topic, offset)):
-            await asyncio.sleep(0.5)
-            continue
-        msg, new_offset = read_message(topic, offset)
-        if msg is not None:
-            ansbytes = f'{topic} {msg}'.encode()
-            try:
-                writer.write(len(ansbytes).to_bytes(4,'big') + ansbytes)
-                await writer.drain()
-                update_client_offset(client_id, topic, new_offset)
-            except Exception:
-                return
-        else:
-            # No new message, update offset anyway
-            # This can happen if message was expired
-            if new_offset != offset:
-                update_client_offset(client_id, topic, new_offset)
-                # So that we re-check for new messages immediately
-                continue
-            # Wait for new message event
-            if topic in topic_events:
-                try:
-                    await topic_events[topic].wait(timeout=5)
-                except Exception:
-                    return
-            else:
-                await asyncio.sleep(0.5)  # No subscribed topics, sleep briefly
+        # Heart beat from client
+        elif command=='PNG':
+            client_heartbeats[client_id] = time.time()
+            print(f"Client {client_id} heartbeat at {time.time()}")
 
 async def client_writer(writer: asyncio.StreamWriter, client_id: str):
     count = 0
@@ -154,7 +132,7 @@ async def client_writer(writer: asyncio.StreamWriter, client_id: str):
             if(not check_message_available(topic, offset)):
                 continue
             # loop = asyncio.get_running_loop()
-            msg, new_offset = read_message(topic, offset)
+            msg, new_offset = read_message(topic, offset, MESSAGE_CHECKSUM_ENABLE)
             if msg is not None:
                 ansbytes = f'{topic} {msg}'.encode()
                 try:

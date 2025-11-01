@@ -6,12 +6,13 @@ import pickle
 import threading
 from multiprocessing import Process
 from queue import Queue
+import zlib
 
 HOST, PORT = 'localhost',1234
 TOPIC = 'test_topic'
 
-MSG_CNT_PER_PRODUCER = 5000
-NUM_PRODUCERS = 200
+MSG_CNT_PER_PRODUCER = 10000
+NUM_PRODUCERS = 1
 MSG_SIZE = 1024
 
 FLAG = 'Z'
@@ -39,7 +40,7 @@ def producer(num_msgs, msg_size, producer_id):
     id_len = int.from_bytes(_, 'big')
     _ = conn.recv(id_len)
     id_str = _.decode()
-    _ = f'ID {id_str}'.encode()
+    _ = f'CID {id_str}'.encode()
     sendall(conn,len(_).to_bytes(4,'big') + _)
 
     send_queue = Queue()
@@ -48,7 +49,7 @@ def producer(num_msgs, msg_size, producer_id):
         while True:
             try:
                 time.sleep(30)
-                ping_msg = 'PING'.encode()
+                ping_msg = 'PNG'.encode()
                 msg_bytes = len(ping_msg).to_bytes(4,'big') + ping_msg
                 send_queue.put(msg_bytes)
             except Exception as e:
@@ -65,11 +66,13 @@ def producer(num_msgs, msg_size, producer_id):
         if not send_queue.empty():
             msg = send_queue.get()
             sendall(conn,msg)
-        msg_bytes = f'PUB {LOCAL_TOPIC} {str(time.time())} '.encode()
-        msg_bytes = msg_bytes + (FLAG*(msg_size-len(msg_bytes)-8)).encode()
-        msg_bytes = len(msg_bytes).to_bytes(4,'big') + msg_bytes
-        if((i+1)%BATCH_SIZE==0):
-            sendall(conn, msg_bytes)
+        payload = f'{str(time.time())} '.encode()
+        payload = payload + (FLAG*(msg_size-len(payload)-12)).encode()
+        # Add the checksum
+        hash = zlib.crc32(payload).to_bytes(4,'big')
+        msg_bytes = f'PUB {LOCAL_TOPIC} '.encode() + payload
+        msg_bytes = len(msg_bytes).to_bytes(4,'big') + msg_bytes + hash # 4 Byte checksum included
+        sendall(conn, msg_bytes)
     conn.close()
     duration = time.time() - start
     # print(f"Producer {producer_id} sent {num_msgs} msgs in {duration:.2f}s -> {num_msgs/(duration+0.001):.1f} msg/s")
@@ -91,7 +94,7 @@ def consumer(id_str,producer_id=0):
     conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     conn.connect((HOST,PORT))
 
-    id_msg = f'ID {id_str}'.encode()
+    id_msg = f'CID {id_str}'.encode()
     sendall(conn,len(id_msg).to_bytes(4,'big') + id_msg)
 
 
@@ -107,7 +110,7 @@ def consumer(id_str,producer_id=0):
         while True:
             try:
                 time.sleep(30)
-                ping_msg = 'PING'.encode()
+                ping_msg = 'PNG'.encode()
                 sendall(conn,len(ping_msg).to_bytes(4,'big') + ping_msg)
                 print(f"Consumer {producer_id} heartbeat sent")
             except Exception as e:
@@ -180,6 +183,7 @@ if __name__ == '__main__':
                 conn.connect((HOST,PORT))
             except Exception:
                 conn = None
+                time.sleep(1)
                 print("Retrying connection to server...")
         if(user_id.get(idx) is None):
             _ ='REG'.encode()

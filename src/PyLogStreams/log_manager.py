@@ -7,7 +7,7 @@ import platform
 import _io
 from dataclasses import dataclass
 from segment_cache import LRUCache
-from utility import set_sequential_hint
+from utility import set_sequential_hint, checksum_verify
 
 RETENSION = 5*60*60 # Seconds
 
@@ -158,23 +158,31 @@ def rollover_file(topic):
     topics_log_file[topic] = new_segment_list
     return __segment
 
-def append_message(topic, message):
-    if not message or message=='':
-        return
+""" Take topic, message in bytes, and checksum. Stores it and returns the result code """
+# Appended message framing [msg_bytes][4 bytes hash]
+def append_message(topic, msg_bytes, hash=None) -> int: # Result code
+    if not msg_bytes or msg_bytes==b'':
+        return 1 # Invalid message
+    if hash and len(hash)!=4:
+        return 3 # Invalid hash
+
+    if hash:
+        if not checksum_verify(msg_bytes, int.from_bytes(hash, 'big')):
+            return 2 # Corrupted message
+        # Append the hash at last of message
+        msg_bytes += hash
+
     # We are ignoring index because list size can change while appending the message
     f,mm,create_time,filesize,write_offset, _ = get_topic_log(topic)
     file_start_offset = get_offset_from_filename(f.name)
     file_write_offset = write_offset-file_start_offset
-    msg_bytes = message.encode()
     msg_len = len(msg_bytes)
     # Check if we need to rollover
     #Expiry check
-    flag = False
     if (time.time() - create_time) >= RETENSION:
         f,mm,create_time,filesize,write_offset = rollover_file(topic)
         file_start_offset = get_offset_from_filename(f.name)
         file_write_offset = write_offset - file_start_offset
-        flag = True
     #Size check
     if file_write_offset + 4 + msg_len > mm.size():
         if mm.size() + SEG_SIZE_INC <= SEGMENT_SIZE:
@@ -185,20 +193,17 @@ def append_message(topic, message):
         else:
             # Size limit reached for the segment
             # Updating vars
-            flag = True
             f,mm,create_time,filesize,write_offset = rollover_file(topic)
             file_start_offset = get_offset_from_filename(f.name)
             file_write_offset = write_offset - file_start_offset
 
-    try:
-        mm[file_write_offset:file_write_offset+4] = msg_len.to_bytes(4,'big')
-        mm[file_write_offset+4:file_write_offset+4+msg_len] = msg_bytes
-    except Exception as e:
-        print(f"fire_write_offset: {file_write_offset}, isNew: {flag}, e: {e}")
+    mm[file_write_offset:file_write_offset+4] = msg_len.to_bytes(4,'big')
+    mm[file_write_offset+4:file_write_offset+4+msg_len] = msg_bytes
     # #Flush changes to file
     # mm.flush()
     # Updating the last element
     topics_log_file[topic][-1] = (f,mm,create_time,filesize,write_offset+4+msg_len)
+    return 0 # Success
 
 def get_oldest_offset(topic):
     if topic not in topics_log_file or len(topics_log_file[topic])==0:
@@ -224,7 +229,7 @@ def get_latest_offset(topic):
 def check_message_available(topic, offset):
     return offset < get_latest_offset(topic)
 
-def read_message(topic, offset=0):
+def read_message(topic, offset=0, check_hash=False):
     segment = get_topic_log(topic, offset)
     # mmap is save in topic_log means it's active segment
     if(segment[1] is not None):
@@ -247,7 +252,17 @@ def read_message(topic, offset=0):
         return None, get_oldest_offset(topic) # Returns the oldest offset available
 
     msg_len = int.from_bytes(length_bytes, 'big')
-    msg_bytes = mm[file_offset+4: file_offset+4+msg_len]
+    read_bytes = mm[file_offset+4: file_offset+4+msg_len]
+    if check_hash:
+        msg_bytes = read_bytes[:-4]
+        checksum_bytes = read_bytes[-4:]
+        hash = int.from_bytes(checksum_bytes, 'big')
+        # Verify checksum
+        if not checksum_verify(msg_bytes, hash):
+            print("Hash verification failed")
+            return None, offset+4+msg_len # Message got corrupted return the next offset
+    else:
+        msg_bytes = read_bytes
     return msg_bytes.decode(), offset+4+msg_len
 
 def mark_file(f, mm, deletion_time):

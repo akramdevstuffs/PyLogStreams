@@ -20,12 +20,36 @@
 
 ## [2025-11-01]
 
-- implementation of selectors is put on hold right now
-- After uvloop and posix_advice or os hinting concurrency got a bit better
-- Currently handles 200+ client if running it on my machine
-- With throughput of 20k to 30k for 1KB message in my machine
-- Throughput 63k send and receiving or 126k msgs/s of 1KB msg in total in macbook m2
-- Implemented heartbeat system for detecting disconnected clients.
-- Implemented custom offset setting by consumer. Consumer can update their offset by doing
-      - SET [TOPIC] [OFFSET]
-      - This can help prevent the previous problem of offset getting updated after client is disconnected because of coroutine not terminating
+### Status
+- Implementation of `selectors` is currently on hold.
+- After enabling `uvloop` and applying `posix_advice` (OS hinting), concurrency improved.
+- The system now handles over **200+ clients** on my machine.
+
+### Performance
+- Achieves **20k–30k msgs/s** throughput for **1 KB messages** on my machine.
+- Achieved **~63k send + receive ops (≈126k msgs/s)** for **1 KB messages** on a MacBook M2.
+
+### Reliability
+- Implemented a **heartbeat system** to detect disconnected clients.
+- Added a **message checksum** mechanism to maintain integrity.  
+  - PUB message frame format: `[4B length][message][4B checksum]`.
+
+### Protocol
+- Added support for **manual consumer offset setting**:
+  - Command: `SET [TOPIC] [OFFSET]`
+  - This prevents the issue of offsets being updated after a client disconnects due to coroutine leaks.
+- Standardized all command names to **3 bytes**:
+  - `PUB`, `SUB`, `SET`, `CID` (was `ID`), `PNG` (was `PING`), `POG` (was `PONG`).
+
+### Bug Report — Client Offset Issue
+- **Symptom:** Server crashes when reloading saved client offsets.
+- **Steps to reproduce:**
+  1. Produce and consume 50k messages multiple times.
+  2. Restart the server (loads saved offsets).
+  3. Produce and consume another 50k messages → crash occurs.
+- **Observation:** During tests, the offset was always reset to `0` before consuming to ensure consuming starts from the oldest message.
+- **Possible cause:** Incorrect offset restoration or race condition after reload.
+
+### Next Steps
+- Investigate and fix the offset reload crash.
+- Resume `selectors` implementation after stability is confirmed.
