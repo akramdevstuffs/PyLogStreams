@@ -41,7 +41,7 @@ def on_segment_evicted(key, seg: Segment):
 segmentCache = LRUCache(OLD_SEGMENT_CACHE_SIZE, on_segment_evicted)
 
 # Only keeps the latest offset of active segment
-segments_write_offset = {} # ('files/topic/seg1.txt': 0230, ...) 
+segments_write_offset = {} # ('files/topic/seg1.txt': 0230, ...)
 
 delete_file_queue = queue.Queue() # FIFO thread safe queue for deleting the files
 
@@ -122,7 +122,7 @@ def get_topic_log(topic, offset=-1):
             # Save to cache
             segmentCache.put(cache_key, Segment(f, mm, __segment[2], __segment[3], __segment[4]))
             return (f, mm, __segment[2], __segment[3], __segment[4], index)
-        
+
     return __segment + (index,) # Include index in return tuple
 
 def rollover_file(topic):
@@ -169,26 +169,32 @@ def append_message(topic, message):
     msg_len = len(msg_bytes)
     # Check if we need to rollover
     #Expiry check
+    flag = False
     if (time.time() - create_time) >= RETENSION:
         f,mm,create_time,filesize,write_offset = rollover_file(topic)
         file_start_offset = get_offset_from_filename(f.name)
         file_write_offset = write_offset - file_start_offset
+        flag = True
     #Size check
     if file_write_offset + 4 + msg_len > mm.size():
         if mm.size() + SEG_SIZE_INC <= SEGMENT_SIZE:
             # Resize file and mmap here
             f.seek(0, os.SEEK_END)
-            f.write(b'\x00'*(SEG_SIZE_INC)) # Add 1MB
+            f.write(b'\x00'*(SEG_SIZE_INC)) # Add EXTRA_SIZE
             mm.resize(mm.size() + SEG_SIZE_INC)
         else:
             # Size limit reached for the segment
             # Updating vars
+            flag = True
             f,mm,create_time,filesize,write_offset = rollover_file(topic)
             file_start_offset = get_offset_from_filename(f.name)
             file_write_offset = write_offset - file_start_offset
-    
-    mm[file_write_offset:file_write_offset+4] = msg_len.to_bytes(4,'big')
-    mm[file_write_offset+4:file_write_offset+4+msg_len] = msg_bytes
+
+    try:
+        mm[file_write_offset:file_write_offset+4] = msg_len.to_bytes(4,'big')
+        mm[file_write_offset+4:file_write_offset+4+msg_len] = msg_bytes
+    except Exception as e:
+        print(f"fire_write_offset: {file_write_offset}, isNew: {flag}, e: {e}")
     # #Flush changes to file
     # mm.flush()
     # Updating the last element
@@ -290,7 +296,7 @@ def file_remover():
             path,deletion_time = delete_file_queue.get(timeout=1)
         except queue.Empty:
             continue
-        time_pending = deletion_time - time.time() 
+        time_pending = deletion_time - time.time()
         if (time_pending > 0):
             time.sleep(time_pending)
         try:

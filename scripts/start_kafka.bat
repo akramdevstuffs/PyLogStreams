@@ -1,1 +1,1 @@
-rmdir /q /s logs && python src/PyLogStreams/mini_kafka.py
+rmdir /q /s logs && python src/PyLogStreams/broker.py

@@ -1,7 +1,9 @@
-from kafka_file_handler import read_message, append_message, RETENSION
+from log_manager import read_message, append_message, RETENSION
 import time
 
 INTERNAL_CONSUMER_LOG = "__consumer_offset"
+
+client_offsets = {}
 
 def load_client_offsets():
     entries = {}
@@ -26,19 +28,17 @@ def load_client_offsets():
             entries[id] = {}
         entries[id][topic] = topic_offset
         offset = new_offset
-    return entries
+    client_offsets = entries
 
-client_offsets = load_client_offsets()
-
-for id in list(client_offsets.keys()):
-    print(f"Loaded offsets for client {id}: {client_offsets[id]}")
+    for id in list(client_offsets.keys()):
+        print(f"Loaded offsets for client {id}: {client_offsets[id]}")
 
 def get_client_offsets(id) -> dict:
     if id not in client_offsets:
         client_offsets[id] = {}
     return client_offsets[id]
 
-def update_client_offset(id, topic, offset):
+def update_client_offset(id: str, topic: str, offset: int):
     if id not in client_offsets:
         client_offsets[id] = {}
     client_offsets[id][topic] = offset

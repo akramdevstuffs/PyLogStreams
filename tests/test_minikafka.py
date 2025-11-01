@@ -5,81 +5,143 @@ import struct
 import pickle
 import threading
 from multiprocessing import Process
+from queue import Queue
 
 HOST, PORT = 'localhost',1234
 TOPIC = 'test_topic'
 
-MSG_CNT_PER_PRODUCER = 10000*100
-NUM_PRODUCERS = 5
+MSG_CNT_PER_PRODUCER = 5000
+NUM_PRODUCERS = 200
 MSG_SIZE = 1024
+
+FLAG = 'Z'
 
 user_id = {}
 
 pickle_file = 'test_minikafka_pickle.pkl'
 
-def producer(conn, id_str,num_msgs, msg_size, producer_id):
-    msg = ('X'*msg_size).encode()
+def sendall(conn, data):
+    conn.sendall(data)
+    return
+    total_sent = 0
+    while total_sent < len(data):
+        sent = conn.send(data[total_sent:])
+        if sent == 0:
+            raise RuntimeError("socket connection broken")
+        total_sent += sent
+
+def producer(num_msgs, msg_size, producer_id):
+    conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    conn.connect((HOST,PORT))
+    _ ='REG'.encode()
+    conn.sendall((len(_)).to_bytes(4,'big') + _) # Register
+    _ = conn.recv(4) # id_length
+    id_len = int.from_bytes(_, 'big')
+    _ = conn.recv(id_len)
+    id_str = _.decode()
+    _ = f'ID {id_str}'.encode()
+    sendall(conn,len(_).to_bytes(4,'big') + _)
+
+    send_queue = Queue()
+
+    def beating():
+        while True:
+            try:
+                time.sleep(30)
+                ping_msg = 'PING'.encode()
+                msg_bytes = len(ping_msg).to_bytes(4,'big') + ping_msg
+                send_queue.put(msg_bytes)
+            except Exception as e:
+                print(f"Exception in beating: {e}")
+                break
+    beat_thread = threading.Thread(target=beating, daemon=True)
+    beat_thread.start()
     LOCAL_TOPIC = f'{TOPIC}{producer_id}'
     msg_batches = []
-    curr_batch = b''
     BATCH_SIZE = 1
-    for i in range(num_msgs):
-        t_str = str(time.time()).encode()
-        msg_bytes = f'PUB {LOCAL_TOPIC} {str(time.time())} '.encode()
-        msg_bytes = msg_bytes + ('X'*(msg_size-len(msg_bytes)-8)).encode()
-        curr_batch += len(msg_bytes).to_bytes(4,'big') + msg_bytes
-        if((i+1)%BATCH_SIZE==0):
-            msg_batches.append(curr_batch)
-            curr_batch=b''
     # Measuring total time to send messages
-    if(curr_batch!=b''):
-        msg_batches.append(curr_batch)
     start = time.time()
-    for batch in msg_batches:
-        conn.sendall(batch)
+    for i in range(num_msgs):
+        if not send_queue.empty():
+            msg = send_queue.get()
+            sendall(conn,msg)
+        msg_bytes = f'PUB {LOCAL_TOPIC} {str(time.time())} '.encode()
+        msg_bytes = msg_bytes + (FLAG*(msg_size-len(msg_bytes)-8)).encode()
+        msg_bytes = len(msg_bytes).to_bytes(4,'big') + msg_bytes
+        if((i+1)%BATCH_SIZE==0):
+            sendall(conn, msg_bytes)
     conn.close()
     duration = time.time() - start
+    # print(f"Producer {producer_id} sent {num_msgs} msgs in {duration:.2f}s -> {num_msgs/(duration+0.001):.1f} msg/s")
     # print(f"Producer sent {num_msgs} msgs in {duration:.2f}s -> {num_msgs/(duration+0.001):.1f} msg/s")
 
 def recvall(conn, n):
     data = b''
     while len(data) < n:
         packet = conn.recv(n - len(data))
-        if not packet:
+        if not packet or packet==b'':
             return None
         data += packet
     return data
 
 CONSUMER_DELAY = 0 # in seconds
 
-def consumer(conn,id_str,producer_id=0):
-    
+def consumer(id_str,producer_id=0):
+
+    conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    conn.connect((HOST,PORT))
+
+    id_msg = f'ID {id_str}'.encode()
+    sendall(conn,len(id_msg).to_bytes(4,'big') + id_msg)
+
+
     sub_msg = f"SUB {TOPIC}{producer_id}".encode()
-    conn.sendall(len(sub_msg).to_bytes(4,'big') + sub_msg)
+    sendall(conn,len(sub_msg).to_bytes(4,'big') + sub_msg)
+
+    # Offset reset message
+    reset_msg = f"SET {TOPIC}{producer_id} 0".encode()
+    sendall(conn,len(reset_msg).to_bytes(4,'big') + reset_msg)
+
+
+    def beating():
+        while True:
+            try:
+                time.sleep(30)
+                ping_msg = 'PING'.encode()
+                sendall(conn,len(ping_msg).to_bytes(4,'big') + ping_msg)
+                print(f"Consumer {producer_id} heartbeat sent")
+            except Exception as e:
+                print(f"Exception in beating: {e}")
+                break
+    beat_thread = threading.Thread(target=beating, daemon=True)
+    beat_thread.start()
 
     recv_count = 0
     start = time.time()
     total_latency = 0
     flag = ' '
+    max_latency = 0
     while recv_count<MSG_CNT_PER_PRODUCER:
         try:
-            len_bytes = recvall(conn,4)
+            len_bytes = conn.recv(4)
             if not len_bytes:
-                continue
+                print(f"Connection closed by server cnt {recv_count}")
+                break
             msg_len = int.from_bytes(len_bytes,'big')
             msg = recvall(conn,msg_len).decode()
             t_str = msg.split(' ')[1]
             t = float(t_str)
             latency = time.time() - t - CONSUMER_DELAY
-            flag = msg[30]
+            flag = msg[100]
             total_latency += latency*1000
+            max_latency = max(max_latency, latency*1000)
             recv_count += 1
         except Exception as e:
             print(f"Exception in consumer: {e}")
     conn.close()
     avg_latency = total_latency/(recv_count)
     duration = time.time() - start
-    # print(f"Consumer received {recv_count} msgs in {duration:.2f}s -> {recv_count/(duration+0.001):.1f} msg/s and avg_latency {avg_latency}ms")
+    print(f"Consumer received {recv_count} msgs in {duration:.2f}s -> {recv_count/(duration+0.001):.1f} msg/s and avg_latency {avg_latency}ms max_latency {max_latency}ms flag {flag}")
 
 
 # load_topics_log()
@@ -108,29 +170,6 @@ if __name__ == '__main__':
     processes = []
 
     for idx in range(NUM_PRODUCERS):
-        conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        conn.connect((HOST,PORT))
-        _ ='REG'.encode()
-        conn.sendall((len(_)).to_bytes(4,'big') + _) # Register
-        _ = conn.recv(4) # id_length
-        id_len = int.from_bytes(_, 'big')
-        _ = conn.recv(id_len)
-        id_str = _.decode()
-        p = Process(target=producer, args=(conn,id_str,MSG_CNT_PER_PRODUCER, MSG_SIZE, idx))
-        processes.append(p)
-    start = time.time()
-    for p in processes:
-        p.start()
-
-    for p in processes:
-        p.join()
-    
-    duration = time.time() - start
-    print(f"All producers finished in {duration:.2f}s")
-    
-    processes = []
-
-    for idx in range(NUM_PRODUCERS):
         # p = Process(target=consumer, args=(idx,))
         # p.start()
         # processes.append(p)
@@ -152,12 +191,28 @@ if __name__ == '__main__':
             user_id[idx] = id_str
         else:
             id_str = user_id[idx]
-            id_msg = f'ID {id_str}'.encode()
-            conn.sendall(len(id_msg).to_bytes(4,'big') + id_msg)
-        t = Process(target=consumer, args=(conn,id_str,idx,))
+        conn.close()
+        t = Process(target=consumer, args=(id_str,idx,))
+        t.start()
         processes.append(t)
 
-    
+    start = time.time()
+
+    for idx in range(NUM_PRODUCERS):
+        p = Process(target=producer, args=(MSG_CNT_PER_PRODUCER, MSG_SIZE, idx))
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
+    # duration = time.time() - start
+    # print(f"All producers finished in {duration:.2f}s")
+
+    processes = []
+
+
+
     for p in processes:
         p.start()
 
