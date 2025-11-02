@@ -53,3 +53,36 @@
 ### Next Steps
 - Investigate and fix the offset reload crash.
 - Resume `selectors` implementation after stability is confirmed.
+
+## [2025-11-02]
+
+* Added **message integrity checksum**, which currently verifies only the message body (not the command).
+* When checksum is enabled, the producer now sends messages as:
+  `[4 bytes message length][message][4 bytes hash]`
+* On the broker side:
+
+  * The checksum is verified and stored with the message on disk.
+  * When a consumer reads it, the checksum is verified again before delivery.
+* Using `zlib.crc32` for hashing (implemented in `src/PyLogStreams/utility.py` as `verify_checksum`).
+* Updated `append_message` in `src/PyLogStreams/log_manager.py` to accept an optional checksum input.
+  It verifies the checksum and returns a result code:
+
+  * `0` → success
+  * `1` → invalid message
+  * `2` → corrupted data
+  * `3` → invalid hash or hash length ≠ 4 bytes
+* **Next step:** implement an ACK system so the broker can send result codes to clients, allowing retry or error handling on failure.
+
+---
+
+* Added **Client implementation** in `client/client.py`.
+  Provides a `Client` class for interacting with the broker.
+
+  * Constructor: `Client(host, port)` — connects to the broker on init
+  * `register()` — register a new client and get client ID
+  * `login(id)` — log in existing client
+  * `subscribe(topic)` — subscribe to topic
+  * `produce(topic, message)` — publish a message
+  * `consume()` — block until a message arrives and return it
+  * `reset_topic_offset(topic)` — reset topic offset to 0 on server
+* The client runs background **writer** and **ping** threads for concurrent and safe message handling.
