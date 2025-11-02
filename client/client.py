@@ -59,10 +59,16 @@ class Client:
         framed = self._frame_message('CID',id)
         self.send_queue.put(framed)
 
-    def reset_topic_offset(self, topic):
+    def reset_offset_oldest(self, topic):
         """Sets client topic offset to 0"""
         framed = self._frame_message('SET '+topic, '0')
         self.send_queue.put(framed)
+    
+    def reset_offset_latest(self, topic):
+        """Sets client topic offset to latest offset"""
+        framed = self._frame_message('SET '+topic, '-1')
+        self.send_queue.put(framed)
+
     
     def subscribe(self, topic:str):
         """Subscribes to the topic"""

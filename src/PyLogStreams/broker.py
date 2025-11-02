@@ -1,7 +1,7 @@
 import uuid
 import asyncio
 import time
-from log_manager import read_message, append_message, start_threads,load_topics_log, check_message_available
+from log_manager import read_message, append_message, start_threads,load_topics_log, check_message_available, get_latest_offset
 from offsets_manager import update_client_offset, get_client_offsets, load_client_offsets
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -84,6 +84,9 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             parts = msg.split(' ')
             topic = parts[1]
             offset = int(parts[2])
+            # If offset -1 set it to latest_offset
+            if offset==-1:
+                offset = get_latest_offset(topic)
             update_client_offset(client_id, topic, offset)
         elif command == 'PUB':
             msg = msg_bytes.decode()

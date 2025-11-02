@@ -84,5 +84,19 @@
   * `subscribe(topic)` — subscribe to topic
   * `produce(topic, message)` — publish a message
   * `consume()` — block until a message arrives and return it
-  * `reset_topic_offset(topic)` — reset topic offset to 0 on server
+  * `reset_offset_oldest(topic)` — reset topic offset to 0 on server
+  * `reset_offset_latest(topic)` - reset topic offset to lastest on server
 * The client runs background **writer** and **ping** threads for concurrent and safe message handling.
+
+---
+
+* Added **`SET TOPIC offset -1`** support in `broker.py`, allowing clients to reset a topic’s offset to the **latest message**.
+
+---
+
+* Implemented **Locust-based stress testing** in `tests/locustfile.py`.
+
+  * Supports sustained load testing up to **12 MB/s**.
+  * Measures **average (50th percentile)** and **95th percentile** latencies.
+  * Automatically adjusts the number of producer and consumer users.
+  * Generates detailed **throughput and latency graphs** for performance analysis.
