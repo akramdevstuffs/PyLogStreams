@@ -100,3 +100,13 @@
   * Measures **average (50th percentile)** and **95th percentile** latencies.
   * Automatically adjusts the number of producer and consumer users.
   * Generates detailed **throughput and latency graphs** for performance analysis.
+
+## [2025-11-22]
+
+* Implemented a ReaderThread in reader.py
+* It runs on separated thread and takes read request query it and push the results
+* Previously doing disk I/O in main loop of asyncio, now shifted it to separate thread ReaderThread.
+* Implemented multiple ReaderThread and each ReaderThread owns a topic.
+* The topic is assigned to ReaderThreads through round robin.
+* Each ReaderThread have a queue.SimpleQueue for pushing the requests. Then each consumer will have a asyncio.Queue for consuming the request
+* Improved the latency from 500ms to 50ms range.

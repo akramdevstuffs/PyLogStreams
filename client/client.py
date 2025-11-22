@@ -33,7 +33,7 @@ class Client:
             except Exception as e:
                 print("Send failed:",e)
                 self.alive = False
-    
+
     def _ping_loop(self):
         """Enqueue heartbeat message in the sent queue"""
         while self.alive:
@@ -63,23 +63,23 @@ class Client:
         """Sets client topic offset to 0"""
         framed = self._frame_message('SET '+topic, '0')
         self.send_queue.put(framed)
-    
+
     def reset_offset_latest(self, topic):
         """Sets client topic offset to latest offset"""
         framed = self._frame_message('SET '+topic, '-1')
         self.send_queue.put(framed)
 
-    
+
     def subscribe(self, topic:str):
         """Subscribes to the topic"""
         framed = self._frame_message('SUB',topic)
         self.send_queue.put(framed)
-    
+
     def produce(self, topic:str, message:str):
         """Produces a message in the topic channel"""
-        framed = self._frame_message('PUB '+topic, message, add_checksum=True)
+        framed = self._frame_message('PUB '+topic, message, add_checksum=self.checksum_enabled)
         self.send_queue.put(framed)
-    
+
     def recvall(self, size: int)->bytes:
         data = b''
         while len(data) < size:
@@ -100,7 +100,7 @@ class Client:
                     self.alive = False
                     raise RuntimeError("socket connection broken")
                 total_sent += sent
-    
+
     def _frame_message(self, cmd,payload, add_checksum=False) -> bytes:
         """Frame message in the format: [length][payload][checksum] and also checksum if required"""
         hash = b''
@@ -120,4 +120,3 @@ class Client:
         if not msg_bytes:
             return None
         return msg_bytes.decode()
-

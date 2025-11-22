@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from segment_cache import LRUCache
 from utility import set_sequential_hint, checksum_verify
 
-RETENSION = 5*60*60 # Seconds
+RETENSION = 60 # Seconds
 
 GRACE_DELETION_TIME = 5 # Delete file after 5 seconds of being marked
 
@@ -136,8 +136,12 @@ def rollover_file(topic):
         active_seg = segment_list[-1]
     # Closing active segment if it's exists and opened
     if (active_seg and active_seg[1] is not None):  # Checking if mmap is None
-        active_seg[1].close()
-        active_seg[0].close()
+        """ Instead of closing it now, just put it in the cache it will get closed by itself when it will be not need.
+            It will fix the race condition where the file that is in use got closed.
+          """
+        # active_seg[1].close()
+        # active_seg[0].close()
+        segmentCache.put(active_seg[0].name, Segment(active_seg[0], active_seg[1], active_seg[2], active_seg[3], active_seg[4]))
         topics_log_file[topic][-1] = (active_seg[0], None, active_seg[2], active_seg[3], active_seg[4])
     start_offset = 0
     # If there's previous segment then updating new write offset

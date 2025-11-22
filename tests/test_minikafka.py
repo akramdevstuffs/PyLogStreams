@@ -7,12 +7,13 @@ import threading
 from multiprocessing import Process
 from queue import Queue
 import zlib
+import random
 
 HOST, PORT = 'localhost',1234
 TOPIC = 'test_topic'
 
-MSG_CNT_PER_PRODUCER = 10000
-NUM_PRODUCERS = 50
+MSG_CNT_PER_PRODUCER = 10
+NUM_PRODUCERS = 1000
 MSG_SIZE = 1024
 
 FLAG = 'Z'
@@ -34,14 +35,20 @@ def sendall(conn, data):
 def producer(num_msgs, msg_size, producer_id):
     conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     conn.connect((HOST,PORT))
-    _ ='REG'.encode()
-    conn.sendall((len(_)).to_bytes(4,'big') + _) # Register
-    _ = conn.recv(4) # id_length
-    id_len = int.from_bytes(_, 'big')
-    _ = conn.recv(id_len)
-    id_str = _.decode()
-    _ = f'CID {id_str}'.encode()
-    sendall(conn,len(_).to_bytes(4,'big') + _)
+    register_done = False
+    while not register_done:
+        try:
+            _ ='REG'.encode()
+            conn.sendall((len(_)).to_bytes(4,'big') + _) # Register
+            _ = conn.recv(4) # id_length
+            id_len = int.from_bytes(_, 'big')
+            _ = conn.recv(id_len)
+            id_str = _.decode()
+            _ = f'CID {id_str}'.encode()
+            sendall(conn,len(_).to_bytes(4,'big') + _)
+            register_done = True
+        except Exception as e:
+            print(f"Producer {producer_id} failed to connect")
 
     send_queue = Queue()
 
@@ -66,16 +73,19 @@ def producer(num_msgs, msg_size, producer_id):
         if not send_queue.empty():
             msg = send_queue.get()
             sendall(conn,msg)
-        payload = f'{str(time.time())} '.encode()
+        interval = 1000 + int(time.time())%1000 # 25ms base + (0,24)ms randomly
+        time.sleep(interval*0.001)
+        payload = f'{str(time.time())} {i+1} '.encode()
         payload = payload + (FLAG*(msg_size-len(payload)-12)).encode()
         # Add the checksum
-        hash = zlib.crc32(payload).to_bytes(4,'big')
+        # hash = zlib.crc32(payload).to_bytes(4,'big')
+        hash = b''
         msg_bytes = f'PUB {LOCAL_TOPIC} '.encode() + payload
         msg_bytes = len(msg_bytes).to_bytes(4,'big') + msg_bytes + hash # 4 Byte checksum included
         sendall(conn, msg_bytes)
     conn.close()
     duration = time.time() - start
-    # print(f"Producer {producer_id} sent {num_msgs} msgs in {duration:.2f}s -> {num_msgs/(duration+0.001):.1f} msg/s")
+    print(f"Producer {producer_id} sent {num_msgs} msgs in {duration:.2f}s -> {num_msgs/(duration+0.001):.1f} msg/s")
     # print(f"Producer sent {num_msgs} msgs in {duration:.2f}s -> {num_msgs/(duration+0.001):.1f} msg/s")
 
 def recvall(conn, n):
@@ -102,7 +112,7 @@ def consumer(id_str,producer_id=0):
     sendall(conn,len(sub_msg).to_bytes(4,'big') + sub_msg)
 
     # Offset reset message
-    reset_msg = f"SET {TOPIC}{producer_id} 0".encode()
+    reset_msg = f"SET {TOPIC}{producer_id} -1".encode()
     sendall(conn,len(reset_msg).to_bytes(4,'big') + reset_msg)
 
 
@@ -124,7 +134,15 @@ def consumer(id_str,producer_id=0):
     total_latency = 0
     flag = ' '
     max_latency = 0
-    while recv_count<MSG_CNT_PER_PRODUCER:
+    total_sent_delay = 0
+    max_sent_delay = 0
+    curr_index = 0
+    conn.settimeout(30) # Setting a timeout of 15 seconds for conn.recv
+    t_elasped = time.time()
+    while curr_index<MSG_CNT_PER_PRODUCER:
+        #Break if time elasped since last message is more the limit
+        if time.time() - t_elasped > 60:
+            break
         try:
             len_bytes = conn.recv(4)
             if not len_bytes:
@@ -133,18 +151,30 @@ def consumer(id_str,producer_id=0):
             msg_len = int.from_bytes(len_bytes,'big')
             msg = recvall(conn,msg_len).decode()
             t_str = msg.split(' ')[1]
+            t2_str = msg.split(' ')[-1] # Time at which broker received the message
+            curr_index = int(msg.split(' ')[2])
             t = float(t_str)
             latency = time.time() - t - CONSUMER_DELAY
+            # Time took for producer to sent it and broker to acknowledge the message
+            sent_delay = float(t2_str) - t
             flag = msg[100]
             total_latency += latency*1000
+            total_sent_delay += sent_delay*1000
+            max_sent_delay = max(max_sent_delay, sent_delay*1000)
             max_latency = max(max_latency, latency*1000)
             recv_count += 1
+            t_elasped = time.time()
+            # print(f"Latency {total_latency/recv_count}")
+        except socket.timeout:
+            print(f"Consumer id:{producer_id} got timed out")
         except Exception as e:
             print(f"Exception in consumer: {e}")
     conn.close()
+    if recv_count==0: recv_count=1
     avg_latency = total_latency/(recv_count)
+    avg_sent_delay = total_sent_delay/(recv_count)
     duration = time.time() - start
-    print(f"Consumer received {recv_count} msgs in {duration:.2f}s -> {recv_count/(duration+0.001):.1f} msg/s and avg_latency {avg_latency}ms max_latency {max_latency}ms flag {flag}")
+    print(f"Consumer received {recv_count} msgs in {duration:.2f}s -> {recv_count/(duration+0.001):.1f} msg/s and avg_latency {avg_latency}ms max_latency {max_latency}ms \nsent_delay: [avg-> {avg_sent_delay}ms, max-> {max_sent_delay}] flag {flag}")
 
 
 # load_topics_log()
@@ -195,6 +225,8 @@ if __name__ == '__main__':
             user_id[idx] = id_str
         else:
             id_str = user_id[idx]
+        sub_msg = f"SUB {TOPIC}{idx}".encode()
+        sendall(conn,len(sub_msg).to_bytes(4,'big') + sub_msg)
         conn.close()
         t = Process(target=consumer, args=(id_str,idx,))
         t.start()
