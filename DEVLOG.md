@@ -103,10 +103,33 @@
 
 ## [2025-11-22]
 
-* Implemented a ReaderThread in reader.py
-* It runs on separated thread and takes read request query it and push the results
-* Previously doing disk I/O in main loop of asyncio, now shifted it to separate thread ReaderThread.
-* Implemented multiple ReaderThread and each ReaderThread owns a topic.
-* The topic is assigned to ReaderThreads through round robin.
-* Each ReaderThread have a queue.SimpleQueue for pushing the requests. Then each consumer will have a asyncio.Queue for consuming the request
-* Improved the latency from 500ms to 50ms range.
+### ReaderThread Architecture
+- Implemented a **ReaderThread** in `reader.py`.
+- ReaderThread runs on a **separate thread**, handling disk I/O outside the asyncio event loop.
+- All read requests are queued, processed by the ReaderThread, and results are pushed asynchronously.
+- Added support for **multiple ReaderThreads**, each owning a **topic**.
+- Topic assignment to ReaderThreads is performed using **round-robin** distribution.
+
+### Queues & Data Flow
+- Each ReaderThread uses a `queue.SimpleQueue` for incoming read requests.
+- Each consumer uses an `asyncio.Queue` to receive results back from its assigned ReaderThread.
+
+### Performance Improvements
+- Moved disk I/O off the main asyncio loop.
+- Observed latency improvement from **~500ms** → **~50ms** range.
+
+## [2025-11-27]
+
+### Improvements
+- Added **gevent** as an optional executor in `client.client.py` (fallback to threads).
+- Updated `tests/locustfile.py` to use **gevent** for full greenlet-based concurrency.
+- Updated `tests/locustfile.py` to support **distributed Locust** workers.
+- Increased **file descriptor (FD) limits** in both `broker.py` and `locustfile.py`.
+
+### Load Test Results
+- Tested with **4000 concurrent users**, each sending **1 message/sec**.
+- Broker sustained **~5000 msgs/sec** on a single node.
+- Observed:
+  - **Initial p95 latency spikes** up to **2 seconds**.
+  - After stabilization, **p95 latency ~200ms**.
+  - **p50 latency remained < 50ms**, with occasional spikes to **200ms**.

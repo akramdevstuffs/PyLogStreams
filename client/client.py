@@ -5,11 +5,14 @@ import threading
 import queue
 import time
 
+_gevent = None # Lazy import for gevent
+
 class Client:
     checksum_enabled:bool = True
     outgoing_buffer_capacity = 1000
     ping_interval = 30 # in seconds
-    def __init__(self, HOST:str, PORT: int):
+    def __init__(self, HOST:str, PORT: int, use_gevent:bool=False):
+        global _gevent
         self.conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.HOST = HOST
         self.PORT = PORT
@@ -17,10 +20,24 @@ class Client:
         self.send_queue = queue.Queue(self.outgoing_buffer_capacity) # Using queue so message won't get mixed between threads
         self.alive = True
         # Start threads
-        self.writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
-        self.writer_thread.start()
-        self.ping_thread = threading.Thread(target=self._ping_loop, daemon=True)
-        self.ping_thread.start()
+        #Trying to use gevent
+        if use_gevent:
+            try:
+                import gevent
+                from gevent import monkey
+                monkey.patch_all()
+                _gevent = gevent
+                self.writer_thread = _gevent.spawn(self._writer_loop)
+                self.ping_thread = _gevent.spawn(self._ping_loop)
+            except ImportError:
+                # Import failed, use threads
+                use_gevent = False
+                print("gevent is not installed")
+        if not use_gevent:
+            self.writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
+            self.writer_thread.start()
+            self.ping_thread = threading.Thread(target=self._ping_loop, daemon=True)
+            self.ping_thread.start()
 
     def _writer_loop(self):
         """Continously takes message from queue and push it to the socket"""
@@ -33,6 +50,7 @@ class Client:
             except Exception as e:
                 print("Send failed:",e)
                 self.alive = False
+        self.conn.close()
 
     def _ping_loop(self):
         """Enqueue heartbeat message in the sent queue"""
@@ -53,6 +71,17 @@ class Client:
         framed = self._frame_message('CID', id_str)
         self.send_queue.put(framed)
         return id_str
+    
+    def close(self):
+        self.alive = False
+        self.send_queue.put(None)
+        if _gevent:
+            self.ping_thread.kill()
+            self.writer_thread.kill()
+        else:
+            self.ping_thread.close()
+            self.writer_thread.close()
+        self.conn.close()
 
     def login(self, id:str):
         """Takes id and login previous clients"""
@@ -80,7 +109,7 @@ class Client:
         framed = self._frame_message('PUB '+topic, message, add_checksum=self.checksum_enabled)
         self.send_queue.put(framed)
 
-    def recvall(self, size: int)->bytes:
+    def recvall(self, size: int)->bytes|None:
         data = b''
         while len(data) < size:
             packet = self.conn.recv(size - len(data))
@@ -110,7 +139,7 @@ class Client:
         return len(msg_bytes).to_bytes(4,'big')+msg_bytes+hash
 
 
-    def consume(self) -> str:
+    def consume(self) -> str|None:
         """Blocks until a message arrives and returns it."""
         len_bytes = self.recvall(4)
         if not len_bytes or len_bytes==b'':

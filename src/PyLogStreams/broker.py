@@ -17,16 +17,21 @@ if os.name == "posix":
 else:
     print("Using default asyncio loop")
 
+# Increasing the soft fds limit
+import resource
+soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+
 HOST = "0.0.0.0"
 PORT = 1234
 
 
 BATCH_SIZE = 50       # drain after 50 messages
 MAX_BUFFERED = 32_000 # or when >64KB of data queued
-LINGER_MS = 5    # only wait 50ms before draining
+LINGER_MS = 10    # only wait 50ms before draining
 BEAT_MAX_DELAY = 120  # seconds
 
-READER_THREAD_COUNT = 50
+READER_THREAD_COUNT = 32
 
 MESSAGE_CHECKSUM_ENABLE = True # Enables the message integrity checks
 
